@@ -1,0 +1,135 @@
+name: Deploy — Support Ticket Classifier
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ── 1. Unit tests (no AWS credentials needed) ────────────────────────────
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v
+
+  # ── 2. tofu plan on PRs (no apply) ───────────────────────────────────────
+  plan:
+    name: Tofu plan
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: github.event_name == 'pull_request'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.8.0"
+
+      - run: tofu init
+      - run: tofu validate
+      - run: tofu plan
+
+  # ── 3. tofu apply on push to main ────────────────────────────────────────
+  deploy:
+    name: Tofu apply + smoke tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.8.0"
+
+      - name: Tofu init
+        run: tofu init
+
+      - name: Tofu validate
+        run: tofu validate
+
+      - name: Tofu apply
+        run: tofu apply -auto-approve
+
+      # ── Smoke tests: run each JSON, verify SUCCEEDED ──────────────────────
+      - name: Smoke tests
+        run: |
+          SFN_ARN=$(tofu output -raw state_machine_arn)
+          BUCKET=$(tofu output -raw bucket_name)
+
+          for f in tests/test_urgent.json tests/test_normal.json tests/test_low.json; do
+            TICKET=$(jq -r .ticket_id "$f")
+            echo "▶ Executing $f (ticket_id=$TICKET)..."
+
+            EXEC=$(aws stepfunctions start-execution \
+              --state-machine-arn "$SFN_ARN" \
+              --input "$(cat "$f")" \
+              --query executionArn --output text)
+
+            # Poll until done (max 60 s)
+            for i in $(seq 1 30); do
+              STATUS=$(aws stepfunctions describe-execution \
+                --execution-arn "$EXEC" \
+                --query status --output text)
+              [[ "$STATUS" != "RUNNING" ]] && break
+              sleep 2
+            done
+
+            echo "  status: $STATUS"
+            [[ "$STATUS" == "SUCCEEDED" ]] || { echo "FAILED: $f"; exit 1; }
+          done
+
+          echo ""
+          echo "=== S3 contents ==="
+          aws s3 ls --recursive "s3://$BUCKET/"
+
+      # ── Verify test_invalid triggers the Fail state ───────────────────────
+      - name: Verify validation failure
+        run: |
+          SFN_ARN=$(tofu output -raw state_machine_arn)
+          EXEC=$(aws stepfunctions start-execution \
+            --state-machine-arn "$SFN_ARN" \
+            --input "$(cat tests/test_invalid.json)" \
+            --query executionArn --output text)
+          sleep 10
+          STATUS=$(aws stepfunctions describe-execution \
+            --execution-arn "$EXEC" \
+            --query status --output text)
+          echo "Invalid ticket status: $STATUS"
+          [[ "$STATUS" == "FAILED" ]] || { echo "Expected FAILED, got $STATUS"; exit 1; }
+          echo "Fail state confirmed."

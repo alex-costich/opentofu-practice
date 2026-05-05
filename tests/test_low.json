@@ -1,0 +1,6 @@
+{
+  "ticket_id": "tk-003",
+  "customer": "user@example.com",
+  "priority_score": 20,
+  "description": "I have a question about how to export data to CSV format"
+}

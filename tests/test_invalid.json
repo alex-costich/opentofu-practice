@@ -1,0 +1,6 @@
+{
+  "ticket_id": "tk-BAD",
+  "customer": "bad@uag.mx",
+  "priority_score": 150,
+  "description": "This ticket has an out-of-range score and must fail validation"
+}
