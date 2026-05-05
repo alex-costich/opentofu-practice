@@ -86,6 +86,9 @@ jobs:
       - name: Tofu apply
         run: tofu apply -auto-approve
 
+      - name: Wait for IAM permissions to propagate
+        run: sleep 30
+
       # ── Smoke tests: run each JSON, verify SUCCEEDED ──────────────────────
       - name: Smoke tests
         run: |
@@ -101,7 +104,6 @@ jobs:
               --input "$(cat "$f")" \
               --query executionArn --output text)
 
-            # Poll until done (max 60 s)
             for i in $(seq 1 30); do
               STATUS=$(aws stepfunctions describe-execution \
                 --execution-arn "$EXEC" \
@@ -111,10 +113,17 @@ jobs:
             done
 
             echo "  status: $STATUS"
-            [[ "$STATUS" == "SUCCEEDED" ]] || { echo "FAILED: $f"; exit 1; }
+
+            if [[ "$STATUS" != "SUCCEEDED" ]]; then
+              echo "=== ERROR DETAILS ==="
+              aws stepfunctions get-execution-history \
+                --execution-arn "$EXEC" \
+                --output json \
+                --query "events[?type=='LambdaFunctionFailed' || type=='ExecutionFailed']"
+              exit 1
+            fi
           done
 
-          echo ""
           echo "=== S3 contents ==="
           aws s3 ls --recursive "s3://$BUCKET/"
 
