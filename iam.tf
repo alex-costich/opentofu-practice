@@ -10,6 +10,31 @@ data "aws_iam_policy_document" "lambda_assume" {
   }
 }
 
+resource "aws_iam_role_policy" "sfn_invoke_lambda" {
+  name = "${var.project_name}-sfn-lambda-invoke"
+  role = aws_iam_role.sfn_exec.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = [
+          module.ticket_validate.arn,
+          module.ticket_classify.arn,
+          module.ticket_route.arn,
+        ]
+      }
+    ]
+  })
+
+  depends_on = [
+    module.ticket_validate,
+    module.ticket_classify,
+    module.ticket_route,
+  ]
+}
+
 resource "aws_iam_role" "lambda_exec" {
   name               = "${var.project_name}-lambda-exec"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
