@@ -22,8 +22,8 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 
 data "aws_iam_policy_document" "lambda_s3" {
   statement {
-    sid     = "S3WriteTickets"
-    actions = ["s3:PutObject"]
+    sid       = "S3WriteTickets"
+    actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.tickets.arn}/*"]
   }
 }
@@ -64,18 +64,8 @@ resource "aws_iam_role_policy" "sfn_invoke_lambda" {
       {
         Effect   = "Allow"
         Action   = "lambda:InvokeFunction"
-        Resource = [
-          module.ticket_validate.arn,
-          module.ticket_classify.arn,
-          module.ticket_route.arn,
-        ]
+        Resource = "arn:aws:lambda:${var.aws_region}:*:function:${var.project_name}-*"
       }
     ]
   })
-
-  depends_on = [
-    module.ticket_validate,
-    module.ticket_classify,
-    module.ticket_route,
-  ]
 }
